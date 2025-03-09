@@ -1,3 +1,6 @@
-2025/03/09-20:13:16.610 12bce Reusing MANIFEST /home/awais/Node Code/facebook-scrapperv2/fb_session/Default/Local Storage/leveldb/MANIFEST-000001
-2025/03/09-20:13:16.619 12bce Recovering log #41
-2025/03/09-20:13:16.619 12bce Reusing old log /home/awais/Node Code/facebook-scrapperv2/fb_session/Default/Local Storage/leveldb/000041.log 
+2025/03/09-20:27:11.008 13dfd Reusing MANIFEST /home/awais/Node Code/facebook-scrapperv2/fb_session/Default/Local Storage/leveldb/MANIFEST-000001
+2025/03/09-20:27:11.015 13dfd Recovering log #41
+2025/03/09-20:27:11.016 13dfd Reusing old log /home/awais/Node Code/facebook-scrapperv2/fb_session/Default/Local Storage/leveldb/000041.log 
+2025/03/09-20:28:11.019 13dfd Level-0 table #46: started
+2025/03/09-20:28:11.025 13dfd Level-0 table #46: 20791 bytes OK
+2025/03/09-20:28:11.032 13dfd Delete type=0 #41
