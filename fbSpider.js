@@ -141,7 +141,6 @@ async function scrollToEnd(page) {
   }
 }
 
-
 async function scrapeFacebookVideos(query, page) {
   if (page.isClosed()) {
     console.error(`❌ Error: Attempted to scrape using a closed page.`);
@@ -160,8 +159,8 @@ async function scrapeFacebookVideos(query, page) {
   await scrollToEnd(page);
   const htmlContent = await page.content();
   const $ = cheerio.load(htmlContent);
-  
-  let results = [];
+
+  let videoResults = [];
   $("div.x1yztbdb").each((_, element) => {
     let videoUrl = $(element).find('a[href*="/watch/"]').attr("href");
     if (videoUrl) videoUrl = `https://www.facebook.com${videoUrl}`;
@@ -173,8 +172,8 @@ async function scrapeFacebookVideos(query, page) {
     const uploaderName = $(element).find("a[href*='/profile.php?id='], a[href^='/']").first().text().trim() || "Unknown";
     let uploaderProfileUrl = $(element).find("a[href*='/profile.php?id='], a[href^='/']").attr("href");
     if (uploaderProfileUrl) uploaderProfileUrl = `https://www.facebook.com${uploaderProfileUrl}`;
-    
-    results.push({
+
+    const videoData = {
       title: title || "Untitled",
       image: thumbnail,
       time: duration,
@@ -183,87 +182,73 @@ async function scrapeFacebookVideos(query, page) {
       thumbnail,
       duration,
       views,
-    });
+    };
+
+    videoResults.push(videoData);
   });
 
-  return results;
+  return videoResults;
 }
 
 async function scrapeFacebookPosts(query, page) {
-  if (page.isClosed()) {
-    console.error(`❌ Error: Attempted to scrape using a closed page.`);
+  if (page.isClosed()) return [];
+
+  await navigateToSearch(page, query);
+
+  try {
+    await page.waitForSelector("div.post-selector", { timeout: 10000 });
+  } catch (error) {
+    console.error(`⚠️ No posts found for "${query}".`);
     return [];
   }
 
-  console.log(`🔍 Searching for posts: "${query}"`);
-  await page.goto(FACEBOOK_SEARCH_POSTS_URL(query), { waitUntil: "networkidle2" });
   await scrollToEnd(page);
-
   const htmlContent = await page.content();
   const $ = cheerio.load(htmlContent);
   
-  let results = [];
-  $("div.x1yztbdb").each((_, element) => {
-    const postText = $(element).find("div[role='article']").text().trim() || "No text";
-    const postUrl = $(element).find("a[href*='/posts/']").attr("href");
-    const image = $(element).find("img").attr("src") || "";
-    const uploaderName = $(element).find("a[href*='/profile.php?id='], a[href^='/']").first().text().trim() || "Unknown";
-    let uploaderProfileUrl = $(element).find("a[href*='/profile.php?id='], a[href^='/']").attr("href");
-    if (uploaderProfileUrl) uploaderProfileUrl = `https://www.facebook.com${uploaderProfileUrl}`;
-    
-    if (postUrl) {
-      results.push({
-        title: postText,
-        image,
-        profileId: uploaderName,
-        authorUrl: uploaderProfileUrl,
-        postUrl: `https://www.facebook.com${postUrl}`,
-      });
-    }
+  let postResults = [];
+  $("div.post-selector").each((_, element) => {
+    const postUrl = $(element).find("a").attr("href") || "";
+    const content = $(element).find("p").text().trim() || "No content available";
+
+    postResults.push({ postUrl, content });
   });
-  return results;
+
+  return postResults;
 }
 
 async function scrapeFacebookPages(query, page) {
-  if (page.isClosed()) {
-    console.error(`❌ Error: Attempted to scrape using a closed page.`);
+  if (page.isClosed()) return [];
+
+  await navigateToSearch(page, query);
+
+  try {
+    await page.waitForSelector("div.page-selector", { timeout: 10000 });
+  } catch (error) {
+    console.error(`⚠️ No pages found for "${query}".`);
     return [];
   }
 
-  console.log(`🔍 Searching for pages: "${query}"`);
-  const FACEBOOK_SEARCH_PAGES_URL = `https://www.facebook.com/search/pages/?q=${encodeURIComponent(query)}`;
-  
-  await page.goto(FACEBOOK_SEARCH_PAGES_URL, { waitUntil: "networkidle2" });
   await scrollToEnd(page);
-
   const htmlContent = await page.content();
   const $ = cheerio.load(htmlContent);
+  
+  let pageResults = [];
+  $("div.page-selector").each((_, element) => {
+    const pageUrl = $(element).find("a").attr("href") || "";
+    const name = $(element).find("h2").text().trim() || "Unknown Page";
 
-  let results = [];
-  $("div.x1yztbdb").each((_, element) => {
-    const pageName = $(element).find("a[role='link']").first().text().trim();
-    let pageUrl = $(element).find("a[role='link']").attr("href");
-    if (pageUrl) pageUrl = `https://www.facebook.com${pageUrl}`;
-    const pageImage = $(element).find("img").attr("src") || "";
-
-    if (pageName && pageUrl) {
-      results.push({
-        title: pageName,
-        postUrl: pageUrl,
-        image: pageImage,
-      });
-    }
+    pageResults.push({ pageUrl, name });
   });
 
-  return results;
+  return pageResults;
 }
 
 
-
-async function uploadResultsToAPI(results) {
+async function uploadResultsToAPI(results,type) {
   try {
     //await axios.post(API_ENDPOINT, { data: results });
-    console.log("✅ Results uploaded successfully!");
+    console.log("✅ Result uploaded successfully of",type);
   } catch (error) {
     console.error("❌ Error uploading data:", error);
   }
@@ -293,10 +278,13 @@ async function getSearchQueriesFromRedis() {
   }
 }
 
+
+
 (async () => {
   const browser = await launchBrowser();
   const page = await browser.newPage();
   await loginToFacebook(page);
+
 
 /*   const values = await getSearchQueriesFromRedis(); // ✅ Fetch search terms from Redis
   if (values.length === 0) {
@@ -318,23 +306,29 @@ async function getSearchQueriesFromRedis() {
     }
   } */
 
-    //searching using env remove  later 
-    let allResults = [];
-    for (const query of SEARCH_QUERIES) {
-      const newPage = await browser.newPage(); // Open a fresh page for each query
-      const videoResults = await scrapeFacebookVideos(query, newPage);
-      const postResults = await scrapeFacebookPosts(query, newPage);
-      const pageResults = await scrapeFacebookPages(query, newPage);
 
+  // Searching using env variables (remove later if needed)
+  for (const query of SEARCH_QUERIES) {
+    const newPage = await browser.newPage(); // Open a fresh page for each query
     
-      await newPage.close(); // Close it after scraping
-      
-      allResults.push(...videoResults, ...postResults, ...pageResults);
+    const videoResults = await scrapeFacebookVideos(query, newPage) || [];
+    for (const video of videoResults) {
+      await uploadResultsToAPI(video,'video');
     }
-
-  if (allResults.length > 0) {
-    await uploadResultsToAPI(allResults);
+    
+    const postResults = await scrapeFacebookPosts(query, newPage) || [];
+    for (const post of postResults) {
+      await uploadResultsToAPI(post,'post');
+    }
+    
+    const pageResults = await scrapeFacebookPages(query, newPage) || [];
+    for (const page of pageResults) {
+      await uploadResultsToAPI(page,'page');
+    }
+    
+    await newPage.close(); // Close it after scraping
   }
+
 
   await browser.close();
   await redisClient.quit(); // ✅ Properly close Redis connection
