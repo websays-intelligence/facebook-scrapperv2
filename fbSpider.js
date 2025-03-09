@@ -4,28 +4,23 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const cheerio = require("cheerio");
 const fs = require("fs");
 const axios = require("axios");
-
+const { createClient } = require("redis");
 
 puppeteer.use(StealthPlugin());
 
 const FACEBOOK_LOGIN_URL = "https://www.facebook.com/login";
 const FACEBOOK_HOME_URL = "https://www.facebook.com/";
-//Facebook videos in sort by most recent order
 const FACEBOOK_SEARCH_VIDEOS_URL = (query) =>
   `https://www.facebook.com/search/videos/?q=${encodeURIComponent(query)}&filters=eyJ2aWRlb3Nfc29ydF9ieTowIjoie1wibmFtZVwiOlwidmlkZW9zX3NvcnRfYnlcIixcImFyZ3NcIjpcIk1vc3QgUmVjZW50XCJ9In0%3D`;
+
+const FACEBOOK_SEARCH_PAGES_URL = (query) =>
+  `https://www.facebook.com/search/pages/?q=${encodeURIComponent(query)}`;
 const FACEBOOK_SEARCH_POSTS_URL = (query) => `https://www.facebook.com/search/posts/?q=${encodeURIComponent(query)}&filters=eyJyZWNlbnRfcG9zdHM6MCI6IntcIm5hbWVcIjpcInJlY2VudF9wb3N0c1wiLFwiYXJnc1wiOlwiXCJ9In0%3D`;
 
-const SEARCH_QUERIES = process.env.SEARCH_QUERIES ? process.env.SEARCH_QUERIES.split(",") : ["zeezoo"];
-
-const FB_EMAIL = process.env.FB_EMAIL;
-const FB_PASSWORD = process.env.FB_PASSWORD;
 const SESSION_FILE_PATH = "session.json";
 const API_ENDPOINT = "https://wapi.websays.com/winput/fb/spider/clippings";
-const { createClient } = require("redis");
 
-// Create Redis client
 const redisClient = createClient();
-
 redisClient.on("error", (err) => console.error("❌ Redis Client Error:", err));
 
 async function launchBrowser() {
@@ -114,15 +109,15 @@ async function loginToFacebook(page) {
 }
 
 
-async function navigateToSearch(page, query) {
+async function navigateToSearch(page, query,type,url) {
   if (page.isClosed()) {
     console.error("❌ Error: Attempted to use a closed page.");
     return;
   }
 
-  console.log(`🔍 Searching for videos: "${query}"`);
+  console.log(`🔍 Searching for : "${query}"`,' of type', type);
   try {
-    await page.goto(FACEBOOK_SEARCH_VIDEOS_URL(query), { waitUntil: "networkidle2" });
+    await page.goto(url(query), { waitUntil: "networkidle2" });
     await new Promise((resolve) => setTimeout(resolve, 5000));
   } catch (error) {
     console.error(`❌ Error navigating to search page for "${query}":`, error);
@@ -147,7 +142,7 @@ async function scrapeFacebookVideos(query, page) {
     return [];
   }
 
-  await navigateToSearch(page, query);
+  await navigateToSearch(page, query,'video',FACEBOOK_SEARCH_VIDEOS_URL);
 
   try {
     await page.waitForSelector("div.x1yztbdb", { timeout: 10000 });
@@ -193,7 +188,7 @@ async function scrapeFacebookVideos(query, page) {
 async function scrapeFacebookPosts(query, page) {
   if (page.isClosed()) return [];
 
-  await navigateToSearch(page, query);
+  await navigateToSearch(page, query,'post',FACEBOOK_SEARCH_POSTS_URL);
 
   try {
     await page.waitForSelector("div.post-selector", { timeout: 10000 });
@@ -220,7 +215,7 @@ async function scrapeFacebookPosts(query, page) {
 async function scrapeFacebookPages(query, page) {
   if (page.isClosed()) return [];
 
-  await navigateToSearch(page, query);
+  await navigateToSearch(page, query,'page',FACEBOOK_SEARCH_PAGES_URL);
 
   try {
     await page.waitForSelector("div.page-selector", { timeout: 10000 });
@@ -261,17 +256,34 @@ function randomlyRotateArray(arr) {
   return [...arr.slice(randomIndex), ...arr.slice(0, randomIndex)];
 }
 
-(async () => {
-  await redisClient.connect(); // ✅ Required for Redis v4+
-  redisClient.on("connect", () => console.log("✅ Redis connected"));
-redisClient.on("error", (err) => console.error("❌ Redis Error:", err));
 
-})();
+async function writeSearchQueriesToRedis(queries) {
+  try {
+    await redisClient.del("fb_channels"); // Clear existing queries
+    for (const query of queries) {
+      const exists = await redisClient.sIsMember("fb_channels", query);
+      if (!exists) {
+        await redisClient.sAdd("fb_channels", query);
+      } else {
+        console.log(`⚠️ Duplicate query skipped: "${query}"`);
+      }
+    }
+    console.log("✅ Search queries written to Redis.",queries);
+  } catch (error) {
+    console.error("❌ Error writing search queries to Redis:", error);
+  }
+}
+
 
 async function getSearchQueriesFromRedis() {
   try {
-    const values = await redisClient.sMembers("fb_channels"); // ✅ Correct method
-    return randomlyRotateArray(values); // Shuffle if needed
+    const queries = await redisClient.sMembers("fb_channels");
+
+    // Ensure uniqueness in case of unexpected duplicates (though Redis sets already prevent them)
+    const uniqueQueries = [...new Set(queries)];
+
+    console.log(`✅ Fetched ${uniqueQueries.length} unique search queries from Redis.`);
+    return uniqueQueries;
   } catch (error) {
     console.error("❌ Error fetching search queries from Redis:", error);
     return [];
@@ -279,38 +291,28 @@ async function getSearchQueriesFromRedis() {
 }
 
 
-
 (async () => {
+  await redisClient.connect();
+  console.log("✅ Redis connected");
+
+  // Write initial search queries to Redis
+  const envQueries = process.env.SEARCH_QUERIES ? process.env.SEARCH_QUERIES.split(",") : ["zeezoo"];
+  await writeSearchQueriesToRedis(envQueries);
+
   const browser = await launchBrowser();
   const page = await browser.newPage();
   await loginToFacebook(page);
 
-
-/*   const values = await getSearchQueriesFromRedis(); // ✅ Fetch search terms from Redis
-  if (values.length === 0) {
+  const queries = await getSearchQueriesFromRedis();
+  if (queries.length === 0) {
     console.log("⚠️ No search queries found in Redis.");
     await browser.close();
     await redisClient.quit();
     return;
   }
-  let allResults = [];
-  for (const value of values) {
-    const searchQuery = value.split(":")[1]; // Extract search term
-    console.log(`🔎 Processing search term: ${searchQuery}`);
 
-    try {
-      const results = await scrapeFacebookVideos(searchQuery, page);
-      allResults.push(...results);
-    } catch (error) {
-      console.error(`❌ Error scraping ${searchQuery}:`, error);
-    }
-  } */
-
-
-  // Searching using env variables (remove later if needed)
-  for (const query of SEARCH_QUERIES) {
-    const newPage = await browser.newPage(); // Open a fresh page for each query
-    
+  for (const query of queries) {
+    const newPage = await browser.newPage();   
     const videoResults = await scrapeFacebookVideos(query, newPage) || [];
     for (const video of videoResults) {
       await uploadResultsToAPI(video,'video');
@@ -326,10 +328,11 @@ async function getSearchQueriesFromRedis() {
       await uploadResultsToAPI(page,'page');
     }
     
-    await newPage.close(); // Close it after scraping
+    if (page && !page.isClosed()) {
+      await page.close();
+    }    
   }
 
-
   await browser.close();
-  await redisClient.quit(); // ✅ Properly close Redis connection
+  await redisClient.quit();
 })();
