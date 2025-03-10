@@ -188,10 +188,11 @@ async function scrapeFacebookVideos(query, page) {
 async function scrapeFacebookPosts(query, page) {
   if (page.isClosed()) return [];
 
-  await navigateToSearch(page, query,'post',FACEBOOK_SEARCH_POSTS_URL);
+  await navigateToSearch(page, query, 'post', FACEBOOK_SEARCH_POSTS_URL);
 
   try {
-    await page.waitForSelector("div.post-selector", { timeout: 10000 });
+    // Wait for posts to load (Update this selector as needed)
+    await page.waitForSelector("div[data-ad-comet-preview]", { timeout: 10000 });
   } catch (error) {
     console.error(`⚠️ No posts found for "${query}".`);
     return [];
@@ -200,14 +201,26 @@ async function scrapeFacebookPosts(query, page) {
   await scrollToEnd(page);
   const htmlContent = await page.content();
   const $ = cheerio.load(htmlContent);
-  
-  let postResults = [];
-  $("div.post-selector").each((_, element) => {
-    const postUrl = $(element).find("a").attr("href") || "";
-    const content = $(element).find("p").text().trim() || "No content available";
 
-    postResults.push({ postUrl, content });
+  let postResults = [];
+  
+  $("div[data-ad-comet-preview]").each((_, element) => {
+    const postUrl = $(element).find("a[href*='/posts/']").attr("href") || "";
+    const content = $(element).find("div[dir='auto']").text().trim() || "No content available";
+
+    if (postUrl && content) {
+      postResults.push({
+        postUrl: `https://www.facebook.com${postUrl}`,
+        content,
+      });
+    }
   });
+
+  if (postResults.length === 0) {
+    console.error(`⚠️ No valid posts extracted for "${query}".`);
+  } else {
+    console.log(`✅ Extracted ${postResults.length} posts for "${query}".`);
+  }
 
   return postResults;
 }
@@ -215,10 +228,10 @@ async function scrapeFacebookPosts(query, page) {
 async function scrapeFacebookPages(query, page) {
   if (page.isClosed()) return [];
 
-  await navigateToSearch(page, query,'page',FACEBOOK_SEARCH_PAGES_URL);
+  await navigateToSearch(page, query, 'page', FACEBOOK_SEARCH_PAGES_URL);
 
   try {
-    await page.waitForSelector("div.page-selector", { timeout: 10000 });
+    await page.waitForSelector("a[role='link']", { timeout: 10000 });
   } catch (error) {
     console.error(`⚠️ No pages found for "${query}".`);
     return [];
@@ -227,17 +240,22 @@ async function scrapeFacebookPages(query, page) {
   await scrollToEnd(page);
   const htmlContent = await page.content();
   const $ = cheerio.load(htmlContent);
-  
-  let pageResults = [];
-  $("div.page-selector").each((_, element) => {
-    const pageUrl = $(element).find("a").attr("href") || "";
-    const name = $(element).find("h2").text().trim() || "Unknown Page";
 
-    pageResults.push({ pageUrl, name });
+  let pageResults = [];
+  
+  $("a[role='link']").each((_, element) => {
+    const pageUrl = $(element).attr("href") || "";
+    const nameElement = $(element).find("span");
+    const name = nameElement.text().trim() || "Unknown Page";
+    console.log('purl',pageUrl)
+    if (pageUrl.includes("facebook.com")) {
+      pageResults.push({ pageUrl, name });
+    }
   });
 
   return pageResults;
 }
+
 
 
 async function uploadResultsToAPI(results,type) {
@@ -313,6 +331,12 @@ async function getSearchQueriesFromRedis() {
 
   for (const query of queries) {
     const newPage = await browser.newPage();   
+
+    const pageResults = await scrapeFacebookPages(query, newPage) || [];
+    for (const page of pageResults) {
+      await uploadResultsToAPI(page,'page');
+    }
+
     const videoResults = await scrapeFacebookVideos(query, newPage) || [];
     for (const video of videoResults) {
       await uploadResultsToAPI(video,'video');
@@ -323,10 +347,7 @@ async function getSearchQueriesFromRedis() {
       await uploadResultsToAPI(post,'post');
     }
     
-    const pageResults = await scrapeFacebookPages(query, newPage) || [];
-    for (const page of pageResults) {
-      await uploadResultsToAPI(page,'page');
-    }
+
     
     if (page && !page.isClosed()) {
       await page.close();
