@@ -185,14 +185,15 @@ async function scrapeFacebookVideos(query, page) {
   return videoResults;
 }
 
+
 async function scrapeFacebookPosts(query, page) {
   if (page.isClosed()) return [];
 
-  await navigateToSearch(page, query, 'post', FACEBOOK_SEARCH_POSTS_URL);
+  await navigateToSearch(page, query, "post", FACEBOOK_SEARCH_POSTS_URL);
 
   try {
-    // Wait for posts to load (Update this selector as needed)
-    await page.waitForSelector("div[data-ad-comet-preview]", { timeout: 10000 });
+    // Updated selector for Facebook posts
+    await page.waitForSelector("div.x1yztbdb.x1n2onr6.xh8yej3", { timeout: 10000 });
   } catch (error) {
     console.error(`⚠️ No posts found for "${query}".`);
     return [];
@@ -203,14 +204,15 @@ async function scrapeFacebookPosts(query, page) {
   const $ = cheerio.load(htmlContent);
 
   let postResults = [];
-  
-  $("div[data-ad-comet-preview]").each((_, element) => {
+
+  $("div.x1yztbdb.x1n2onr6.xh8yej3").each((_, element) => {
+    // Improved selector for extracting post URL
     const postUrl = $(element).find("a[href*='/posts/']").attr("href") || "";
-    const content = $(element).find("div[dir='auto']").text().trim() || "No content available";
+    let content = $(element).find("div[dir='auto']").text().trim() || "No content available";
 
     if (postUrl && content) {
       postResults.push({
-        postUrl: `https://www.facebook.com${postUrl}`,
+        postUrl: `https://www.facebook.com${postUrl.split("?")[0]}`, // Remove unnecessary query params
         content,
       });
     }
@@ -224,6 +226,7 @@ async function scrapeFacebookPosts(query, page) {
 
   return postResults;
 }
+
 
 async function scrapeFacebookPages(query, page) {
   if (page.isClosed()) return [];
@@ -332,6 +335,11 @@ async function getSearchQueriesFromRedis() {
   for (const query of queries) {
     const newPage = await browser.newPage();   
 
+    const postResults = await scrapeFacebookPosts(query, newPage) || [];
+    for (const post of postResults) {
+      await uploadResultsToAPI(post,'post');
+    }
+
     const pageResults = await scrapeFacebookPages(query, newPage) || [];
     for (const page of pageResults) {
       await uploadResultsToAPI(page,'page');
@@ -341,13 +349,6 @@ async function getSearchQueriesFromRedis() {
     for (const video of videoResults) {
       await uploadResultsToAPI(video,'video');
     }
-    
-    const postResults = await scrapeFacebookPosts(query, newPage) || [];
-    for (const post of postResults) {
-      await uploadResultsToAPI(post,'post');
-    }
-    
-
     
     if (page && !page.isClosed()) {
       await page.close();
